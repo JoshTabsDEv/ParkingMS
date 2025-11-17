@@ -6,15 +6,15 @@ const updateSchema = z.object({
   status: z.enum(["available", "occupied", "maintenance"]),
 });
 
-interface Params {
-  params: { id: string };
-}
-
-export async function PATCH(request: Request, { params }: Params) {
+export async function PATCH(
+  request: Request,
+  context: { params: Promise<{ id: string }> }
+) {
   try {
     const body = await request.json();
     const payload = updateSchema.parse(body);
-    const slotId = Number(params.id);
+    const { id } = await context.params;
+    const slotId = Number(id);
     if (Number.isNaN(slotId)) {
       return NextResponse.json({ message: "Invalid slot id" }, { status: 400 });
     }
