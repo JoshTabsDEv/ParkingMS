@@ -1,14 +1,20 @@
-CREATE DATABASE IF NOT EXISTS parking_management CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-USE parking_management;
+-- Digital Ocean MySQL Schema
+-- Note: Database is already created by Digital Ocean
+-- Connect directly to your database - no CREATE DATABASE or USE needed
 
+use parking_management;
+
+-- Create parking slots table
 CREATE TABLE IF NOT EXISTS parking_slots (
   id INT AUTO_INCREMENT PRIMARY KEY,
   label VARCHAR(20) NOT NULL UNIQUE,
   level VARCHAR(30) NOT NULL,
   type ENUM('standard', 'compact', 'electric', 'accessible') DEFAULT 'standard',
   status ENUM('available', 'occupied', 'maintenance') DEFAULT 'available',
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_status (status),
+  INDEX idx_type (type)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS parking_sessions (
   id INT AUTO_INCREMENT PRIMARY KEY,
@@ -21,8 +27,11 @@ CREATE TABLE IF NOT EXISTS parking_sessions (
   hourly_rate DECIMAL(10, 2) NOT NULL DEFAULT 40.00,
   amount_due DECIMAL(10, 2) DEFAULT 0.00,
   status ENUM('active', 'closed') DEFAULT 'active',
-  CONSTRAINT fk_slot FOREIGN KEY (slot_id) REFERENCES parking_slots (id) ON DELETE CASCADE
-);
+  CONSTRAINT fk_slot FOREIGN KEY (slot_id) REFERENCES parking_slots (id) ON DELETE CASCADE,
+  INDEX idx_status (status),
+  INDEX idx_check_in (check_in),
+  INDEX idx_slot_id (slot_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 INSERT INTO parking_slots (label, level, type, status)
 VALUES

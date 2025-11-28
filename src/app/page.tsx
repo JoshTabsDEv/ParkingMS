@@ -3,6 +3,14 @@
 import { useEffect, useMemo, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 
+type User = {
+  id: string;
+  email: string;
+  name: string;
+  role: "admin" | "user";
+  image?: string;
+};
+
 type Slot = {
   id: number;
   label: string;
@@ -40,13 +48,23 @@ const slotTypes = [
 ];
 
 export default function Home() {
+  const [user, setUser] = useState<User | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [authLoading, setAuthLoading] = useState(false);
+  const [loginError, setLoginError] = useState<string | null>(null);
+  
   const [summary, setSummary] = useState<Summary | null>(null);
   const [slots, setSlots] = useState<Slot[]>([]);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [recentSessions, setRecentSessions] = useState<Session[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [dataLoading, setDataLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  const [loginForm, setLoginForm] = useState({
+    email: "",
+    password: "",
+  });
 
   const [slotForm, setSlotForm] = useState({
     label: "",
@@ -65,13 +83,131 @@ export default function Home() {
     [slots]
   );
 
+  const isAdmin = user?.role === "admin";
+  const isUser = user?.role === "user";
+
   useEffect(() => {
-    void loadData();
+    void checkSession();
   }, []);
 
-  async function loadData() {
+  useEffect(() => {
+    if (user) {
+      void loadData();
+    }
+  }, [user]);
+
+  async function checkSession() {
     try {
       setLoading(true);
+      const res = await fetch("/api/auth/session");
+      if (res.ok) {
+        const data = await res.json();
+        setUser(data.session);
+      }
+    } catch (err) {
+      console.error("Session check error:", err);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleAdminLogin(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    setAuthLoading(true);
+    setLoginError(null);
+    try {
+      const res = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(loginForm),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Login failed");
+      }
+      await checkSession();
+      setLoginForm({ email: "", password: "" });
+    } catch (err) {
+      setLoginError(err instanceof Error ? err.message : "Login failed");
+    } finally {
+      setAuthLoading(false);
+    }
+  }
+
+  const handleGoogleCallback = async (response: any) => {
+    try {
+      setAuthLoading(true);
+      setLoginError(null);
+      const res = await fetch("/api/auth/google", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: response.credential }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Google authentication failed");
+      }
+      await checkSession();
+    } catch (err) {
+      setLoginError(err instanceof Error ? err.message : "Google authentication failed");
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!user && process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID) {
+      // Check if script already exists
+      if (document.querySelector('script[src="https://accounts.google.com/gsi/client"]')) {
+        return;
+      }
+
+      // Load Google Identity Services
+      const script = document.createElement("script");
+      script.src = "https://accounts.google.com/gsi/client";
+      script.async = true;
+      script.defer = true;
+      script.onload = () => {
+        if (window.google) {
+          window.google.accounts.id.initialize({
+            client_id: process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || "",
+            callback: handleGoogleCallback,
+          });
+
+          // Render button after a short delay
+          setTimeout(() => {
+            const buttonDiv = document.getElementById("google-login-button");
+            if (buttonDiv && window.google) {
+              window.google.accounts.id.renderButton(buttonDiv, {
+                theme: "outline",
+                size: "large",
+                width: "100%",
+              });
+            }
+          }, 100);
+        }
+      };
+      document.head.appendChild(script);
+    }
+  }, [user]);
+
+  async function handleLogout() {
+    try {
+      await fetch("/api/auth/logout", { method: "POST" });
+      setUser(null);
+      setSummary(null);
+      setSlots([]);
+      setSessions([]);
+      setRecentSessions([]);
+    } catch (err) {
+      console.error("Logout error:", err);
+    }
+  }
+
+  async function loadData() {
+    if (!user) return;
+    try {
+      setDataLoading(true);
       setError(null);
       const [summaryRes, slotRes, sessionRes] = await Promise.all([
         fetch("/api/summary"),
@@ -91,7 +227,7 @@ export default function Home() {
       console.error(err);
       setError("Could not load data from the server.");
     } finally {
-      setLoading(false);
+      setDataLoading(false);
     }
   }
 
@@ -172,12 +308,128 @@ export default function Home() {
     }
   }
 
+  // Show loading state while checking session
+  if (loading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-50">
+        <p className="text-sm text-slate-500">Loading...</p>
+      </div>
+    );
+  }
+
+  // Show login page if not authenticated
+  if (!user) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-50">
+        <div className="w-full max-w-md rounded-lg border bg-white p-8 shadow-sm">
+          <h1 className="mb-6 text-2xl font-semibold text-slate-800">
+            Parking Management
+          </h1>
+          
+          {loginError && (
+            <div className="mb-4 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              {loginError}
+            </div>
+          )}
+
+          <div className="space-y-6">
+            {/* Admin Login */}
+            <div>
+              <h2 className="mb-4 text-lg font-medium text-slate-700">
+                Admin Login
+              </h2>
+              <form className="flex flex-col gap-3" onSubmit={handleAdminLogin}>
+                <input
+                  required
+                  type="email"
+                  placeholder="Email"
+                  className="rounded border border-slate-300 px-3 py-2 text-sm"
+                  value={loginForm.email}
+                  onChange={(e) =>
+                    setLoginForm({ ...loginForm, email: e.target.value })
+                  }
+                  disabled={authLoading}
+                />
+                <input
+                  required
+                  type="password"
+                  placeholder="Password"
+                  className="rounded border border-slate-300 px-3 py-2 text-sm"
+                  value={loginForm.password}
+                  onChange={(e) =>
+                    setLoginForm({ ...loginForm, password: e.target.value })
+                  }
+                  disabled={authLoading}
+                />
+                <button
+                  type="submit"
+                  disabled={authLoading}
+                  className="rounded bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
+                >
+                  {authLoading ? "Logging in..." : "Login as Admin"}
+                </button>
+              </form>
+            </div>
+
+            {/* Divider */}
+            <div className="relative">
+              <div className="absolute inset-0 flex items-center">
+                <div className="w-full border-t border-slate-300"></div>
+              </div>
+              <div className="relative flex justify-center text-xs uppercase">
+                <span className="bg-white px-2 text-slate-500">Or</span>
+              </div>
+            </div>
+
+            {/* Google Login */}
+            <div>
+              <h2 className="mb-4 text-lg font-medium text-slate-700">
+                User Login (View Only)
+              </h2>
+              <div id="google-login-button" className="flex justify-center">
+                {!process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID && (
+                  <p className="text-xs text-slate-500">
+                    Google login requires NEXT_PUBLIC_GOOGLE_CLIENT_ID environment variable
+                  </p>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Main application UI (for authenticated users)
   return (
     <div className="min-h-screen bg-slate-50">
       <header className="border-b bg-white px-6 py-4 shadow-sm">
-        <h1 className="text-2xl font-semibold text-slate-800">
-          Parking Management
-        </h1>
+        <div className="mx-auto flex max-w-6xl items-center justify-between">
+          <h1 className="text-2xl font-semibold text-slate-800">
+            Parking Management
+          </h1>
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2">
+              {user.image && (
+                <img
+                  src={user.image}
+                  alt={user.name}
+                  className="h-8 w-8 rounded-full"
+                />
+              )}
+              <div className="text-right">
+                <p className="text-sm font-medium text-slate-800">{user.name}</p>
+                <p className="text-xs text-slate-500 capitalize">{user.role}</p>
+              </div>
+            </div>
+            <button
+              onClick={handleLogout}
+              className="rounded border border-slate-300 px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100"
+            >
+              Logout
+            </button>
+          </div>
+        </div>
       </header>
 
       <main className="mx-auto flex max-w-6xl flex-col gap-6 px-6 py-6">
@@ -193,7 +445,7 @@ export default function Home() {
           </div>
         )}
 
-        {loading ? (
+        {dataLoading ? (
           <p className="text-sm text-slate-500">Loading data...</p>
         ) : summary ? (
           <>
@@ -220,120 +472,123 @@ export default function Home() {
               />
             </section>
 
-            <section className="grid gap-6 lg:grid-cols-2">
-              <Card title="Add Parking Slot">
-                <form className="flex flex-col gap-3" onSubmit={handleCreateSlot}>
-                  <input
-                    required
-                    placeholder="Label e.g. A-01"
-                    className="rounded border border-slate-300 px-3 py-2 text-sm"
-                    value={slotForm.label}
-                    onChange={(e) =>
-                      setSlotForm({ ...slotForm, label: e.target.value })
-                    }
-                  />
-                  <input
-                    required
-                    placeholder="Level e.g. Basement 1"
-                    className="rounded border border-slate-300 px-3 py-2 text-sm"
-                    value={slotForm.level}
-                    onChange={(e) =>
-                      setSlotForm({ ...slotForm, level: e.target.value })
-                    }
-                  />
-                  <select
-                    className="rounded border border-slate-300 px-3 py-2 text-sm"
-                    value={slotForm.type}
-                    onChange={(e) =>
-                      setSlotForm({ ...slotForm, type: e.target.value })
-                    }
-                  >
-                    {slotTypes.map((type) => (
-                      <option key={type.value} value={type.value}>
-                        {type.label}
-                      </option>
-                    ))}
-                  </select>
-                  <button
-                    type="submit"
-                    className=" rounded bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800"
-                  >
-                    Save Slot
-                  </button>
-                </form>
-              </Card>
+            {/* Admin-only forms */}
+            {isAdmin && (
+              <section className="grid gap-6 lg:grid-cols-2">
+                <Card title="Add Parking Slot">
+                  <form className="flex flex-col gap-3" onSubmit={handleCreateSlot}>
+                    <input
+                      required
+                      placeholder="Label e.g. A-01"
+                      className="rounded border border-slate-300 px-3 py-2 text-sm"
+                      value={slotForm.label}
+                      onChange={(e) =>
+                        setSlotForm({ ...slotForm, label: e.target.value })
+                      }
+                    />
+                    <input
+                      required
+                      placeholder="Level e.g. Basement 1"
+                      className="rounded border border-slate-300 px-3 py-2 text-sm"
+                      value={slotForm.level}
+                      onChange={(e) =>
+                        setSlotForm({ ...slotForm, level: e.target.value })
+                      }
+                    />
+                    <select
+                      className="rounded border border-slate-300 px-3 py-2 text-sm"
+                      value={slotForm.type}
+                      onChange={(e) =>
+                        setSlotForm({ ...slotForm, type: e.target.value })
+                      }
+                    >
+                      {slotTypes.map((type) => (
+                        <option key={type.value} value={type.value}>
+                          {type.label}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="submit"
+                      className=" rounded bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800"
+                    >
+                      Save Slot
+                    </button>
+                  </form>
+                </Card>
 
-              <Card title="Check-in Vehicle">
-                <form
-                  className="flex flex-col gap-3"
-                  onSubmit={handleRegisterSession}
-                >
-                  <select
-                    required
-                    className="rounded border border-slate-300 px-3 py-2 text-sm"
-                    value={sessionForm.slotId}
-                    onChange={(e) =>
-                      setSessionForm({ ...sessionForm, slotId: e.target.value })
-                    }
+                <Card title="Check-in Vehicle">
+                  <form
+                    className="flex flex-col gap-3"
+                    onSubmit={handleRegisterSession}
                   >
-                    <option value="">Select an available slot</option>
-                    {availableSlots.map((slot) => (
-                      <option key={slot.id} value={slot.id}>
-                        {slot.label} · {slot.level}
-                      </option>
-                    ))}
-                  </select>
-                  <input
-                    required
-                    placeholder="Vehicle Plate"
-                    className="rounded border border-slate-300 px-3 py-2 text-sm"
-                    value={sessionForm.vehiclePlate}
-                    onChange={(e) =>
-                      setSessionForm({
-                        ...sessionForm,
-                        vehiclePlate: e.target.value,
-                      })
-                    }
-                  />
-                  <input
-                    required
-                    placeholder="Vehicle Type"
-                    className="rounded border border-slate-300 px-3 py-2 text-sm"
-                    value={sessionForm.vehicleType}
-                    onChange={(e) =>
-                      setSessionForm({
-                        ...sessionForm,
-                        vehicleType: e.target.value,
-                      })
-                    }
-                  />
-                  <input
-                    required
-                    placeholder="Driver Name"
-                    className="rounded border border-slate-300 px-3 py-2 text-sm"
-                    value={sessionForm.driverName}
-                    onChange={(e) =>
-                      setSessionForm({
-                        ...sessionForm,
-                        driverName: e.target.value,
-                      })
-                    }
-                  />
-                  <button
-                    type="submit"
-                    className=" rounded bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-50"
-                    disabled={!availableSlots.length}
-                  >
-                    Start Session
-                  </button>
-                  {!availableSlots.length && (
-                    <p className="text-xs text-slate-500">
-                      No available slots right now.
-                    </p>
-                  )}
-                </form>
-              </Card>
-            </section>
+                    <select
+                      required
+                      className="rounded border border-slate-300 px-3 py-2 text-sm"
+                      value={sessionForm.slotId}
+                      onChange={(e) =>
+                        setSessionForm({ ...sessionForm, slotId: e.target.value })
+                      }
+                    >
+                      <option value="">Select an available slot</option>
+                      {availableSlots.map((slot) => (
+                        <option key={slot.id} value={slot.id}>
+                          {slot.label} · {slot.level}
+                        </option>
+                      ))}
+                    </select>
+                    <input
+                      required
+                      placeholder="Vehicle Plate"
+                      className="rounded border border-slate-300 px-3 py-2 text-sm"
+                      value={sessionForm.vehiclePlate}
+                      onChange={(e) =>
+                        setSessionForm({
+                          ...sessionForm,
+                          vehiclePlate: e.target.value,
+                        })
+                      }
+                    />
+                    <input
+                      required
+                      placeholder="Vehicle Type"
+                      className="rounded border border-slate-300 px-3 py-2 text-sm"
+                      value={sessionForm.vehicleType}
+                      onChange={(e) =>
+                        setSessionForm({
+                          ...sessionForm,
+                          vehicleType: e.target.value,
+                        })
+                      }
+                    />
+                    <input
+                      required
+                      placeholder="Driver Name"
+                      className="rounded border border-slate-300 px-3 py-2 text-sm"
+                      value={sessionForm.driverName}
+                      onChange={(e) =>
+                        setSessionForm({
+                          ...sessionForm,
+                          driverName: e.target.value,
+                        })
+                      }
+                    />
+                    <button
+                      type="submit"
+                      className=" rounded bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-50"
+                      disabled={!availableSlots.length}
+                    >
+                      Start Session
+                    </button>
+                    {!availableSlots.length && (
+                      <p className="text-xs text-slate-500">
+                        No available slots right now.
+                      </p>
+                    )}
+                  </form>
+                </Card>
+              </section>
+            )}
 
             <section className="grid gap-6 lg:grid-cols-2">
               <Card title={`Active Sessions (${sessions.length})`}>
@@ -355,12 +610,14 @@ export default function Home() {
                             {new Date(session.check_in).toLocaleString()}
                           </p>
                         </div>
-                        <button
-                          className="rounded border border-slate-300 px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100"
-                          onClick={() => handleCheckout(session.id)}
-                        >
-                          Checkout
-                        </button>
+                        {isAdmin && (
+                          <button
+                            className="rounded border border-slate-300 px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100"
+                            onClick={() => handleCheckout(session.id)}
+                          >
+                            Checkout
+                          </button>
+                        )}
                       </li>
                     ))}
                   </ul>
@@ -394,7 +651,9 @@ export default function Home() {
                     Parking Slots
                   </h2>
                   <p className="text-xs text-slate-500">
-                    Manage slot status directly in the database if needed.
+                    {isAdmin
+                      ? "Manage slot status directly in the database if needed."
+                      : "View-only mode"}
                   </p>
                 </div>
                 <button
@@ -472,9 +731,12 @@ function Card({ title, children }: { title: string; children: ReactNode }) {
 }
 
 function EmptyState({ text }: { text: string }) {
-  return (
-    <p className="px-4 py-6 text-sm text-slate-600">
-      {text}
-    </p>
-  );
+  return <p className="px-4 py-6 text-sm text-slate-600">{text}</p>;
+}
+
+// Extend Window interface for Google
+declare global {
+  interface Window {
+    google: any;
+  }
 }
